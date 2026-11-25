@@ -1,0 +1,44 @@
+// Renovate keeps the Cargo dependencies and the GitHub Actions (workflows) current: a few pull requests a week
+// against the default branch, gated by CI, merged by a person (no automerge).
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  // github>GravionLabs/ci: 7 days minimum release age (security fixes exempt), actions pinned to commit SHAs.
+  extends: ["config:recommended", ":semanticCommits", ":dependencyDashboard", "github>GravionLabs/ci"],
+  // `chore(deps): ...` keeps dependency updates out of the release notes.
+  // Issue titles start with their level: the dashboard is a PBI.
+  dependencyDashboard: true,
+  dependencyDashboardTitle: "[PBI] chore: Dependency Dashboard",
+  semanticCommitType: "chore",
+  semanticCommitScope: "deps",
+  timezone: "Europe/Zurich",
+  schedule: ["before 6am on monday"],
+  lockFileMaintenance: { enabled: true, schedule: ["before 6am on the first day of the month"] },
+  // Raise the requirement in Cargo.toml to the new version instead of only updating Cargo.lock.
+  rangeStrategy: "bump",
+  automerge: false,
+  labels: ["dependencies"],
+  enabledManagers: ["cargo", "github-actions"],
+  // A known vulnerability gets a pull request at once, outside the schedule.
+  vulnerabilityAlerts: { enabled: true, labels: ["security"], schedule: ["at any time"] },
+  osvVulnerabilityAlerts: true,
+  packageRules: [
+    {
+      // The GravionLabs/ci workflows and actions stay pinned to a commit SHA with the version as a comment
+      // (`@<sha> # v1.19.0`); Renovate updates the SHA and the comment together. No major bump: a person decides.
+      matchManagers: ["github-actions"],
+      matchPackageNames: ["GravionLabs/ci", "GravionLabs/ci/**"],
+      matchUpdateTypes: ["major"],
+      enabled: false,
+    },
+    {
+      // The toolchain of rust-toolchain.toml is raised by a person, together with rust-version in Cargo.toml.
+      matchDepNames: ["rust"],
+      enabled: false,
+    },
+    {
+      // Majors get their own pull requests, labelled, and a person decides.
+      matchUpdateTypes: ["major"],
+      addLabels: ["major"],
+    },
+  ],
+}

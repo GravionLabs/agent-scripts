@@ -1,0 +1,174 @@
+# Release of agent-scripts, started by hand (workflow_dispatch) on main.
+#
+#   ci.yml -> determine-version (GitVersion.yml) -> the binary archives of every target, built with that version
+#   -> gh-release: writes the version into Cargo.toml and Cargo.lock, regenerates CHANGELOG.md with git-cliff, commits
+#   both to main ([skip ci]), tags that commit v<version>, creates the GitHub Release (SBOM attached) and closes the
+#   issues and milestones it shipped -> the archives and SHA256SUMS are attached to the release.
+#
+# The archives are built before the tag is written, so a failed build leaves no tag and no release behind.
+# Archives: agent-scripts-<version>-<target>.tar.gz (.zip on Windows), each with the binary, README.md and LICENSE.
+#
+# dry-run: true builds and smoke tests the archives and writes SHA256SUMS as a workflow artifact; it creates no commit,
+# tag or release.
+#
+# GH_PAT: a token of a repository admin (classic PAT with scope `repo`, or fine-grained with contents: write). The
+# `main` ruleset requires a pull request and the `ci` check; the admin role bypasses it, the GITHUB_TOKEN cannot, so
+# the version and changelog commit is pushed with GH_PAT.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Build the archives only: no commit, tag or release"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release
+  # A release in progress is never canceled.
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  version:
+    name: Version
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.semver }}
+    steps:
+      - name: Refuse a release from another branch
+        if: ${{ github.ref != 'refs/heads/main' && !inputs.dry-run }}
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          echo "a release is dispatched on main, not on $REF (dry-run works on any branch)" >&2
+          exit 1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # required by GitVersion
+      - name: Determine version
+        id: version
+        uses: GravionLabs/ci/versioning/determine-version@633aa5d6a75bb0160bdc44b7a4474473e3252fc5 # v1.19.0
+        with:
+          # below 1.0 the repository's GitVersion.yml applies: breaking changes raise the minor version
+          conventional-commits: "false"
+          gitversion-config-file: GitVersion.yml
+          # a release is always stable; a dry run on another branch shows the version main would get
+          channel: stable
+      - name: Check the version
+        env:
+          VERSION: ${{ steps.version.outputs.semver }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected version: $VERSION" >&2; exit 1; }
+          echo "version: $VERSION"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      # Checks out the dispatched commit, sets the version in Cargo.toml for this build, builds --release, packs
+      # the archive with its .sha256, runs the packed binary with --version and uploads both as the artifact <target>.
+      - uses: GravionLabs/ci/rust/release-binary@633aa5d6a75bb0160bdc44b7a4474473e3252fc5 # v1.19.0
+        with:
+          version: ${{ needs.version.outputs.version }}
+          package: agent-scripts
+          binary: agent-scripts
+          target: ${{ matrix.target }}
+          archive-name: agent-scripts-${{ needs.version.outputs.version }}-${{ matrix.target }}
+          extra-files: README.md LICENSE
+
+  checksums:
+    name: SHA256SUMS
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write SHA256SUMS
+        working-directory: dist
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          sha256sum --check ./*.sha256
+          rm ./*.sha256
+          count=$(ls agent-scripts-"$VERSION"-* | wc -l)
+          [ "$count" -eq 5 ] || { echo "expected 5 archives, found $count" >&2; ls -l; exit 1; }
+          sha256sum agent-scripts-"$VERSION"-* > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ needs.version.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [version, checksums]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # version and changelog commit, tag, GitHub Release, assets
+      issues: write # close-issues, close-milestones
+      pull-requests: read # close-issues reads the release PR
+      id-token: write # attest the SBOM
+      attestations: write # attest the SBOM
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # git-cliff reads the whole history
+          token: ${{ secrets.GH_PAT }} # pushes the version commit past the main ruleset
+
+      # Commits Cargo.toml, Cargo.lock and CHANGELOG.md to main in one [skip ci] commit, tags that commit, creates the
+      # release (skipped when it exists, so a re-run is safe) and closes the issues and milestones it shipped.
+      - name: Create GitHub Release
+        uses: GravionLabs/ci/versioning/gh-release@633aa5d6a75bb0160bdc44b7a4474473e3252fc5 # v1.19.0
+        with:
+          version: ${{ needs.version.outputs.version }}
+          changelog-file: CHANGELOG.md
+          cliff-config: cliff.toml
+          update-changelog: "true"
+          version-command: |
+            set -euo pipefail
+            sed -i -E '0,/^version = "[^"]*"/s//version = "'"$VERSION"'"/' Cargo.toml
+            sed -i -E '/^name = "agent-scripts"$/{n;s/^version = "[^"]*"/version = "'"$VERSION"'"/;}' Cargo.lock
+            grep -q '^version = "'"$VERSION"'"' Cargo.toml
+          token: ${{ secrets.GH_PAT }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Attach the archives and SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
