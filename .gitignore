@@ -1,1 +1,3 @@
 /target
+# git-cliff-action writes its release notes here during a release; never commit them
+/git-cliff/

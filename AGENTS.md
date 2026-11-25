@@ -26,7 +26,7 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same on Linux, macOS and Windows; its `ci` job is the one required check on `main` (`.github/rulesets/main.json`).
+CI (`.github/workflows/ci.yml`) runs the same on Linux, macOS and Windows; its `ci` job is the one required check on `main` and `release/**` (`.github/rulesets/main.json`).
 
 ## CI and releases
 
