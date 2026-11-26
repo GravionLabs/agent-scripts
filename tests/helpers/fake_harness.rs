@@ -6,6 +6,7 @@
 //! - `FAKE_STDOUT`, `FAKE_STDERR`: what it prints.
 //! - `FAKE_WRITE`: lines `<path>=<content>`, files it writes; a `\r` in the content is a line break.
 //! - `FAKE_DELETE`: a file it deletes.
+//! - `FAKE_LINK`: `<existing>=<new>`, a hard link it creates, with the directory of the new name.
 //! - `FAKE_CHILD`: a file; it starts a child of its own that appends to that file while it lives.
 //!   `FAKE_CHILD_STUBBORN` makes the child ignore SIGTERM, `FAKE_CHILD_SESSION` gives it a session
 //!   of its own. The harness continues once the child lives. `FAKE_CHILD_ORPHAN` starts it through
@@ -47,6 +48,13 @@ fn main() {
     }
     if let Ok(path) = var("FAKE_DELETE") {
         fs::remove_file(path).expect("delete");
+    }
+    if let Ok(link) = var("FAKE_LINK") {
+        let (existing, new) = link.split_once('=').expect("existing=new");
+        if let Some(parent) = std::path::Path::new(new).parent() {
+            fs::create_dir_all(parent).expect("directory");
+        }
+        fs::hard_link(existing, new).expect("hard link");
     }
     if let Ok(beat) = var("FAKE_CHILD")
         && var("FAKE_CHILD_ORPHAN").is_ok()
