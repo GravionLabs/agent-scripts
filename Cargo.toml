@@ -1,6 +1,6 @@
 [package]
 name = "agent-scripts"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 description = "Agent scripts: saved agent calls as Markdown with frontmatter, and the runner shared by poimen and Nixe"
