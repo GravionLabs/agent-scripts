@@ -213,8 +213,9 @@ fn reasons(file: &Path, errors: &[Issue]) -> String {
 }
 
 /// Reads the script once and checks it: the content whose hash is compared is the content that runs.
-/// Returns the script and the identity of the file that was read.
-fn load(request: &Request, host: &Host) -> Result<(Script, FileId), Box<Outcome>> {
+/// Returns the script, the file it was read from and the identity of that file. The identity is its
+/// own only while the file is held: afterwards the system may give it to a new file.
+fn load(request: &Request, host: &Host) -> Result<(Script, File, FileId), Box<Outcome>> {
     let (file, name) = locate(request, host).map_err(|e| Box::new(refused(e)))?;
     let unreadable = |e: std::io::Error| Box::new(refused(format!("{}: {e}", file.display())));
     let canonical = file.canonicalize().map_err(unreadable)?;
@@ -248,7 +249,7 @@ fn load(request: &Request, host: &Host) -> Result<(Script, FileId), Box<Outcome>
             file.display()
         ))));
     }
-    Ok((script, id))
+    Ok((script, handle, id))
 }
 
 /// Takes the lock of the script file `id`, one for all its hard links. The operating system releases
@@ -275,7 +276,8 @@ fn lock(state_dir: Option<&Path>, id: FileId) -> Result<File, String> {
 /// Runs the script of `request` and returns when it ended. Setting `cancel` ends the run.
 pub fn run(request: &Request, host: &Host, cancel: &AtomicBool) -> Outcome {
     let started = Instant::now();
-    let (script, id) = match load(request, host) {
+    // the file is held until the end of the run, see `load`
+    let (script, _file, id) = match load(request, host) {
         Ok(loaded) => loaded,
         Err(outcome) => return *outcome,
     };

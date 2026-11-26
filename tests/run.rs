@@ -803,6 +803,20 @@ fn hard_links_to_one_script_share_one_lock() {
     first.wait().unwrap();
 }
 
+#[test]
+fn a_new_file_never_gets_the_lock_of_a_removed_script() {
+    let s = Setup::new();
+    let script = s.script("timeout: 30s", "p");
+    let mut first = running(&s, &script, &[("FAKE_SLEEP_MS", "20000")]);
+    fs::remove_file(&script).unwrap();
+    // some file systems hand a free identity to the next new file
+    let new = s.write("scripts/t.md", "---\nharness: fake\n---\np");
+    let (code, record) = s.json(&new, &[], &[]);
+    assert_eq!(code, 0, "{record}");
+    first.kill().unwrap();
+    first.wait().unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn a_signal_cancels_the_run_and_ends_the_tree() {
