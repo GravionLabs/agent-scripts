@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use sha2::{Digest, Sha256};
 
@@ -14,6 +14,8 @@ use crate::process;
 #[derive(Debug)]
 pub(crate) struct Snapshot {
     root: PathBuf,
+    /// The content filters git is configured with: programs that `git status` starts.
+    filters: Vec<u8>,
     /// By the path relative to the root, as the bytes git gives.
     paths: BTreeMap<Vec<u8>, State>,
 }
@@ -28,6 +30,11 @@ enum State {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let out = git_output(dir, args)?;
+    out.status.success().then_some(out.stdout)
+}
+
+fn git_output(dir: &Path, args: &[&str]) -> Option<Output> {
     let mut command = Command::new(process::resolve("git").ok()?);
     // a file system monitor of the repository config would be a program git starts
     command
@@ -45,8 +52,14 @@ fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
     ] {
         command.env_remove(name);
     }
-    let out = command.output().ok()?;
-    out.status.success().then_some(out.stdout)
+    command.output().ok()
+}
+
+/// The `filter.*` entries of the configuration of `dir`; reading them starts nothing.
+fn filters(dir: &Path) -> Option<Vec<u8>> {
+    let out = git_output(dir, &["config", "-z", "--get-regexp", "^filter\\."])?;
+    // 1: there is none
+    matches!(out.status.code(), Some(0 | 1)).then_some(out.stdout)
 }
 
 #[cfg(unix)]
@@ -85,11 +98,17 @@ fn hash(path: &Path) -> std::io::Result<[u8; 32]> {
     }
 }
 
-/// The state of the working tree that holds `dir`; `None` outside one.
-pub(crate) fn snapshot(dir: &Path) -> Option<Snapshot> {
+/// The state of the working tree that holds `dir`; `None` outside one. With the snapshot of the
+/// start as `before`, also `None` when the filters changed since: the agent may have written the
+/// configuration, and its programs would run without the limits of the script.
+pub(crate) fn snapshot(dir: &Path, before: Option<&Snapshot>) -> Option<Snapshot> {
     let top = git(dir, &["rev-parse", "--show-toplevel"])?;
     let top = top.strip_suffix(b"\n").unwrap_or(&top);
     let root = path_of(top);
+    let filters = filters(dir)?;
+    if before.is_some_and(|b| b.filters != filters) {
+        return None;
+    }
     let status = git(
         dir,
         &[
@@ -98,6 +117,8 @@ pub(crate) fn snapshot(dir: &Path) -> Option<Snapshot> {
             "-z",
             "--untracked-files=all",
             "--no-renames",
+            // git would run in the submodule, with its configuration
+            "--ignore-submodules=all",
         ],
     )?;
     // each entry is two letters, a space and the path
@@ -106,7 +127,11 @@ pub(crate) fn snapshot(dir: &Path) -> Option<Snapshot> {
         .filter_map(|entry| entry.get(3..))
         .map(|path| (path.to_vec(), state(&root.join(path_of(path)))))
         .collect();
-    Some(Snapshot { root, paths })
+    Some(Snapshot {
+        root,
+        filters,
+        paths,
+    })
 }
 
 impl Snapshot {

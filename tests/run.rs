@@ -478,7 +478,15 @@ fn an_output_never_follows_a_symlink_out_of_the_directory() {
     symlink(&kept, s.path("work/link")).unwrap();
     symlink(s.path("outside/new"), s.path("work/dangling")).unwrap();
     for target in ["file", "append"] {
-        for path in ["dir/new", "dir/sub/new", "link", "dangling"] {
+        for path in [
+            "dir/new",
+            "dir/sub/new",
+            "link",
+            "dangling",
+            // the directory before the `..` does not exist
+            "none/../dir/new",
+            "none/../link",
+        ] {
             let script = s.script(
                 &format!("output: {{ target: {target}, path: {path} }}"),
                 "p",
@@ -545,6 +553,51 @@ fn changed_files_are_those_the_run_changed() {
         record["changedFiles"],
         json!(["again", "clean", "gone", "sub/answer", "sub/new file"])
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_filter_planted_during_the_run_is_never_started() {
+    let s = Setup::new();
+    let work = s.path("work");
+    s.write("work/a", "committed");
+    git(&work, &["init", "--quiet"]);
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "--quiet", "-m", "start"]);
+    let marker = s.path("filtered");
+    let config = format!(
+        "{}[filter \"x\"]\n\tclean = touch '{}'; cat\n",
+        s.read("work/.git/config"),
+        marker.display()
+    );
+    let writes = format!(
+        ".git/config={}\n.gitattributes=a filter=x\na=changed",
+        // one line per file for the fake harness
+        config.replace('\n', "\r")
+    );
+    let script = s.script("", "p");
+    let (code, record) = s.json(&script, &[], &[("FAKE_WRITE", &writes)]);
+    assert_eq!(code, 0, "{record}");
+    assert!(!marker.exists(), "the filter ran");
+    assert!(record.get("changedFiles").is_none(), "{record}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_orphan_in_a_session_of_its_own_ends_too() {
+    let s = Setup::new();
+    let script = s.script("", "p");
+    let beat = s.path("beat");
+    let (code, record) = s.json(
+        &script,
+        &[],
+        &[
+            ("FAKE_CHILD", beat.to_str().unwrap()),
+            ("FAKE_CHILD_ORPHAN", "1"),
+        ],
+    );
+    assert_eq!(code, 0, "{record}");
+    assert!(stopped(&beat), "the orphan lives on");
 }
 
 #[test]

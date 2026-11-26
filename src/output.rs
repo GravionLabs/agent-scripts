@@ -3,24 +3,37 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::format::path_stays_inside;
 
 /// The file of the expanded output path `path` below `dir`, judged by its text. `path` may start
-/// with `dir` itself (`{dir}/out.md`).
+/// with `dir` itself (`{dir}/out.md`). Its `..` are resolved here: what is checked later is what is
+/// opened, whether the directory before a `..` exists or not.
 pub(crate) fn resolve(dir: &Path, path: &str) -> Result<PathBuf, String> {
     let dir_text = dir.to_string_lossy();
     let relative = path
         .strip_prefix(dir_text.as_ref())
         .and_then(|rest| rest.strip_prefix(['/', std::path::MAIN_SEPARATOR]))
         .map_or(path, |rest| rest.trim_start_matches(['/', '\\']));
+    let outside =
+        || format!("the output path {path:?} does not name a file inside the directory of the run");
     if !path_stays_inside(relative) {
-        return Err(format!(
-            "the output path {path:?} does not name a file inside the directory of the run"
-        ));
+        return Err(outside());
     }
-    Ok(dir.join(relative))
+    let mut below = PathBuf::new();
+    for part in Path::new(relative).components() {
+        match part {
+            Component::Normal(name) => below.push(name),
+            Component::CurDir => {}
+            Component::ParentDir if below.pop() => {}
+            _ => return Err(outside()),
+        }
+    }
+    if below.as_os_str().is_empty() {
+        return Err(outside());
+    }
+    Ok(dir.join(below))
 }
 
 /// Checks that what exists of `file` lies inside `dir`.
@@ -80,6 +93,7 @@ mod tests {
         let dir = Path::new(if cfg!(windows) { "C:\\w" } else { "/w" });
         let text = dir.to_str().unwrap();
         assert_eq!(resolve(dir, "a/b"), Ok(dir.join("a/b")));
+        assert_eq!(resolve(dir, "no/../a/./b"), Ok(dir.join("a/b")));
         assert_eq!(resolve(dir, &format!("{text}/a")), Ok(dir.join("a")));
         for path in [
             "../a".to_owned(),

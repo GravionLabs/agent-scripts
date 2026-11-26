@@ -76,7 +76,7 @@ agent-scripts run .agents/scripts/summarize-file.md --file notes/a.md --input au
 | `--json`                 | print the result record instead of the text                            |
 | `--expect-sha256 <hash>` | refuse the script unless the SHA-256 of its content is this hex value |
 
-The record is `{ status, exitCode?, durationMs, text, changedFiles?, outputError? }`. `changedFiles` (in a git working tree) are the paths, relative to the repository root, that are modified or untracked at the end and whose content differs from the start; another process in the same tree shows there too.
+The record is `{ status, exitCode?, durationMs, text, changedFiles?, outputError? }`. `changedFiles` (in a git working tree) are the paths, relative to the repository root, that are modified or untracked at the end and whose content differs from the start; another process in the same tree shows there too. Changes inside submodules are not listed, and the key is absent when the run changed the git filters of the repository (`git status` would start them).
 
 | Exit code | Status      | Meaning                                                                         |
 | --------- | ----------- | ------------------------------------------------------------------------------- |
@@ -92,7 +92,7 @@ SIGHUP and SIGQUIT cancel a run too (exit codes 129 and 131), unless they are ig
 
 - **Tools:** the `tools` of the script are the only ones the agent has. The harness gets their names (the part before `(`) as the tools that exist and each entry as written as a tool that runs without a prompt. A model or tool entry that starts with `-` or names `bypassPermissions` is refused; a prompt that starts with `-` gets a line break before it.
 - **Isolation:** the harness settings of the repository stay out (`claude`: `--setting-sources user --strict-mcp-config`); your own user settings apply. `copilot` reads `.github/copilot/settings.json` of the repository and has no flag to skip it, so its scripts are refused.
-- **Timeout and cancel:** the process tree of the harness ends: SIGTERM, then SIGKILL after 5 s; on Windows a job object. What a harness leaves running after it ended is ended the same way.
+- **Timeout and cancel:** the process tree of the harness ends: SIGTERM, then SIGKILL after 5 s; on Windows a job object. What a harness leaves running after it ended is ended the same way. On macOS a process that left the session of the harness and lost its parent within half a second is not found. A runner that is killed (`kill -9`) ends nothing on macOS; on Linux only the harness itself ends, not what it started (Windows ends everything). Such leftovers do not hold the lock of the script.
 - **One run per script:** a second run of the same file is refused while one runs.
 - **Output:** `file` writes a new file and never overwrites; `append` appends. Both stay inside the directory of the run, also through symlinks, and write only after an `ok` run. `replace` is left to a host application; the command line refuses it.
 - **Limits of the system:** the prompt is one argument of the harness, so the system may refuse a long one (Linux: 128 KiB; Windows: 32 767 characters for the whole command line). On Windows the harness must be an `.exe`; a `.cmd` file needs a shell.

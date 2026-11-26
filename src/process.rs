@@ -2,8 +2,10 @@
 //! and ended with its whole process tree.
 //!
 //! Unix: the child leads a session of its own. Its tree is every process of that session and every
-//! descendant (an agent starts commands in groups and sessions of their own). SIGTERM first,
-//! SIGKILL to what is left after [`GRACE`]. Windows: a job object that ends all its processes.
+//! descendant (an agent starts commands in groups and sessions of their own). On Linux it is also
+//! every process that carries the variable of the run in its environment, so an orphan in another
+//! session is found too. SIGTERM first, SIGKILL to what is left after [`GRACE`]. Windows: a job
+//! object that ends all its processes.
 
 // The process calls of the operating system have no safe form in std.
 #![allow(unsafe_code)]
@@ -12,10 +14,10 @@ use std::ffi::OsString;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The time between SIGTERM and SIGKILL.
 pub(crate) const GRACE: Duration = Duration::from_secs(5);
@@ -125,6 +127,20 @@ impl Drain {
     }
 }
 
+/// The name of an environment variable no other run has; the processes of a run inherit it. One
+/// name per run, so that a run inside a run keeps the one of the outer run.
+fn mark() -> String {
+    static RUNS: AtomicU64 = AtomicU64::new(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!(
+        "AGENT_SCRIPTS_RUN_{}_{}_{now}",
+        std::process::id(),
+        RUNS.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// Runs `argv` in `dir` with no input until it ends, `timeout` passes or `cancel` is set. When it
 /// returns, the process tree has ended. An error means that the program did not run.
 pub(crate) fn run(
@@ -141,12 +157,14 @@ pub(crate) fn run(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let mark = mark();
+    command.env(&mark, "1");
     tree::prepare(&mut command);
     let started = Instant::now();
     let mut child = command
         .spawn()
         .map_err(|e| format!("{program} could not be started: {e}"))?;
-    let mut tree = match tree::Tree::new(&child) {
+    let mut tree = match tree::Tree::new(&child, &mark) {
         Ok(tree) => tree,
         Err(e) => {
             let _ = child.kill();
@@ -219,15 +237,20 @@ mod tree {
     pub(super) struct Tree {
         /// The pid of the child, which is the id of its session.
         leader: u32,
+        /// The start of the environment entry of the run, `<name>=`.
+        #[cfg(target_os = "linux")]
+        mark: Vec<u8>,
         /// Every process seen as part of the tree, with its start.
         seen: HashMap<u32, u64>,
         looked: Instant,
     }
 
     impl Tree {
-        pub(super) fn new(child: &Child) -> io::Result<Tree> {
+        pub(super) fn new(child: &Child, _mark: &str) -> io::Result<Tree> {
             Ok(Tree {
                 leader: child.id(),
+                #[cfg(target_os = "linux")]
+                mark: format!("{_mark}=").into_bytes(),
                 seen: HashMap::new(),
                 looked: Instant::now(),
             })
@@ -256,6 +279,7 @@ mod tree {
                     let session = unsafe { libc::getsid(p.pid as libc::pid_t) };
                     u32::try_from(session) == Ok(self.leader)
                         || self.seen.get(&p.pid) == Some(&p.start)
+                        || self.marked(p.pid)
                 })
                 .map(|p| (p.pid, p.start))
                 .collect();
@@ -272,6 +296,19 @@ mod tree {
             }
             self.seen.extend(members.iter().map(|(p, s)| (*p, *s)));
             members.into_keys().collect()
+        }
+
+        /// Whether the environment of `pid` (readable for processes of this user) has the variable
+        /// of the run.
+        #[cfg(target_os = "linux")]
+        fn marked(&self, pid: u32) -> bool {
+            std::fs::read(format!("/proc/{pid}/environ"))
+                .is_ok_and(|env| env.split(|&b| b == 0).any(|e| e.starts_with(&self.mark)))
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        fn marked(&self, _pid: u32) -> bool {
+            false
         }
 
         /// Sends `signal` to every member; `false` when there is none.
@@ -412,7 +449,7 @@ mod tree {
     pub(super) struct Tree(HANDLE);
 
     impl Tree {
-        pub(super) fn new(child: &Child) -> io::Result<Tree> {
+        pub(super) fn new(child: &Child, _mark: &str) -> io::Result<Tree> {
             // SAFETY: the calls take our own handles and a struct of the size given.
             unsafe {
                 let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());

@@ -332,7 +332,7 @@ fn execute(
         Ok(lock) => lock,
         Err(e) => return refused(e),
     };
-    let before = changes::snapshot(&dir);
+    let before = changes::snapshot(&dir, None);
     if cancel.load(Ordering::SeqCst) {
         return Outcome::new(Status::Cancelled, None);
     }
@@ -372,7 +372,7 @@ fn execute(
         outcome.record.output_error = Some(e);
     }
     outcome.record.changed_files = before.and_then(|before| {
-        let after = changes::snapshot(&dir)?;
+        let after = changes::snapshot(&dir, Some(&before))?;
         Some(before.changed(&after))
     });
     outcome

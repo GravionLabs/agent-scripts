@@ -4,11 +4,12 @@
 //! - `FAKE_RECORD`: writes its arguments, its working directory and `FAKE_MARK` there, one
 //!   NUL-terminated value each.
 //! - `FAKE_STDOUT`, `FAKE_STDERR`: what it prints.
-//! - `FAKE_WRITE`: lines `<path>=<content>`, files it writes.
+//! - `FAKE_WRITE`: lines `<path>=<content>`, files it writes; a `\r` in the content is a line break.
 //! - `FAKE_DELETE`: a file it deletes.
 //! - `FAKE_CHILD`: a file; it starts a child of its own that appends to that file while it lives.
 //!   `FAKE_CHILD_STUBBORN` makes the child ignore SIGTERM, `FAKE_CHILD_SESSION` gives it a session
-//!   of its own. The harness continues once the child lives.
+//!   of its own. The harness continues once the child lives. `FAKE_CHILD_ORPHAN` starts it through
+//!   a process that leads a new session and ends at once, and the harness does not wait.
 //! - `FAKE_STARTED`: a file it creates with its process id when it is ready.
 //! - `FAKE_SLEEP_MS`: how long it stays.
 //! - `FAKE_EXIT`: its exit code.
@@ -23,6 +24,10 @@ use std::time::{Duration, Instant};
 const CHILD_LIFE: Duration = Duration::from_secs(60);
 
 fn main() {
+    if var("FAKE_LAUNCH").is_ok() {
+        launch();
+        return;
+    }
     if let Ok(beat) = var("FAKE_BEAT") {
         child(&beat);
         return;
@@ -37,13 +42,25 @@ fn main() {
     if let Ok(files) = var("FAKE_WRITE") {
         for line in files.lines() {
             let (path, content) = line.split_once('=').expect("path=content");
-            fs::write(path, content).expect("write");
+            fs::write(path, content.replace('\r', "\n")).expect("write");
         }
     }
     if let Ok(path) = var("FAKE_DELETE") {
         fs::remove_file(path).expect("delete");
     }
-    if let Ok(beat) = var("FAKE_CHILD") {
+    if let Ok(beat) = var("FAKE_CHILD")
+        && var("FAKE_CHILD_ORPHAN").is_ok()
+    {
+        let status = Command::new(std::env::current_exe().expect("own path"))
+            .env("FAKE_LAUNCH", "1")
+            .env("FAKE_BEAT", &beat)
+            .status()
+            .expect("launcher");
+        assert!(status.success());
+        while fs::metadata(&beat).map_or(true, |m| m.len() == 0) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    } else if let Ok(beat) = var("FAKE_CHILD") {
         // it keeps the pipes of the harness, as a command of an agent would
         // the harness ends while its child lives: that is what the runner has to clean up
         #[allow(clippy::zombie_processes)]
@@ -72,6 +89,24 @@ fn main() {
     }
     let code = var("FAKE_EXIT").map_or(0, |c| c.parse().expect("exit code"));
     std::process::exit(code);
+}
+
+/// Starts the child from a new session and ends: nothing but its environment ties it to the run.
+fn launch() {
+    #[cfg(unix)]
+    // the session call has no safe form in std
+    #[allow(unsafe_code)]
+    // SAFETY: setsid touches no memory.
+    unsafe {
+        libc::setsid();
+    }
+    // it outlives this process on purpose
+    #[allow(clippy::zombie_processes)]
+    Command::new(std::env::current_exe().expect("own path"))
+        .env_remove("FAKE_LAUNCH")
+        .stdin(Stdio::null())
+        .spawn()
+        .expect("orphan");
 }
 
 fn child(beat: &str) {
