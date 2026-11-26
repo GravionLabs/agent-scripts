@@ -10,6 +10,7 @@ use std::time::Instant;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::events::Events;
 use crate::expand::{self, ExpandError, Values};
 use crate::format::{Issue, Script, Target};
 use crate::harness::{self, Call, Harness};
@@ -87,6 +88,8 @@ pub struct Outcome {
     pub warnings: Vec<Issue>,
     /// What the harness wrote to its standard error.
     pub stderr: String,
+    /// Why the events of the run are missing or incomplete. It changes nothing else of the run.
+    pub events_warning: Option<String>,
 }
 
 impl Outcome {
@@ -104,6 +107,7 @@ impl Outcome {
             usage: false,
             warnings: Vec::new(),
             stderr: String::new(),
+            events_warning: None,
         }
     }
 }
@@ -143,6 +147,11 @@ pub struct Host {
     /// The host applies the target `replace` itself, with the text of the record. Without it such a
     /// script is refused.
     pub replace: bool,
+    /// Write an agent-events run for a run inside a git working tree, to
+    /// `<git-common-dir>/.agents/events/<run>.jsonl`.
+    pub events: bool,
+    /// The id of that run; without one the runner makes one.
+    pub events_run: Option<String>,
 }
 
 impl Host {
@@ -154,6 +163,10 @@ impl Host {
             user_scripts: dir::user_scripts_dir(),
             state_dir: dir::state_dir(),
             replace: false,
+            events: true,
+            events_run: std::env::var_os("AGENT_EVENTS_RUN")
+                .filter(|id| !id.is_empty())
+                .map(|id| id.to_string_lossy().into_owned()),
         }
     }
 }
@@ -257,7 +270,12 @@ pub fn run(request: &Request, host: &Host, cancel: &AtomicBool) -> Outcome {
         Ok(loaded) => loaded,
         Err(outcome) => return *outcome,
     };
+    let events = host
+        .events
+        .then(|| Events::start(&request.dir, host.events_run.as_deref(), &script))
+        .flatten();
     let mut outcome = execute(&script, &canonical, request, host, cancel);
+    outcome.events_warning = events.and_then(|events| events.finish(outcome.record.status));
     outcome.warnings = script.warnings;
     outcome.record.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     outcome

@@ -58,6 +58,9 @@ struct RunArgs {
     /// Print the result record as JSON instead of the text.
     #[arg(long)]
     json: bool,
+    /// Write no agent-events run to `<git-common-dir>/.agents/events/`.
+    #[arg(long)]
+    no_events: bool,
     /// Refuse the script unless the SHA-256 of its content is this hex value.
     #[arg(long, value_name = "HASH")]
     expect_sha256: Option<String>,
@@ -268,7 +271,9 @@ fn run_script(args: RunArgs) -> ExitCode {
             return ExitCode::from(FAILED);
         }
     };
-    let outcome = run::run(&request, &Host::user(), &cancel.flag);
+    let mut host = Host::user();
+    host.events = !args.no_events;
+    let outcome = run::run(&request, &host, &cancel.flag);
 
     for warning in &outcome.warnings {
         let line = format!("{}: warning: {warning}", request.script);
@@ -279,6 +284,9 @@ fn run_script(args: RunArgs) -> ExitCode {
     let _ = stderr.write_all(harness.as_bytes());
     if !harness.is_empty() && !harness.ends_with('\n') {
         let _ = writeln!(stderr);
+    }
+    if let Some(warning) = &outcome.events_warning {
+        let _ = writeln!(stderr, "{}", clean(&format!("warning: {warning}")));
     }
     let record = &outcome.record;
     let mut stdout = std::io::stdout();

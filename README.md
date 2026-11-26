@@ -75,6 +75,7 @@ agent-scripts run .agents/scripts/summarize-file.md --file notes/a.md --input au
 | `--selection-file <f>`   | `{selection}`, read from a file                                        |
 | `--json`                 | print the result record instead of the text                            |
 | `--expect-sha256 <hash>` | refuse the script unless the SHA-256 of its content is this hex value |
+| `--no-events`            | write no agent-events run (see [Events](#events))                     |
 
 The record is `{ status, exitCode?, durationMs, text, changedFiles?, outputError? }`. `changedFiles` (in a git working tree) are the paths, relative to the repository root, that are modified or untracked at the end and whose content differs from the start; another process in the same tree shows there too. Changes inside submodules are not listed, and the key is absent when the run changed the git configuration (`git status` could start a program it names); the runner's own git calls fetch nothing.
 
@@ -98,6 +99,23 @@ SIGHUP and SIGQUIT cancel a run too (exit codes 129 and 131), unless they are ig
 - **Limits of the system:** the prompt is one argument of the harness, so the system may refuse a long one (Linux: 128 KiB; Windows: 32 767 characters for the whole command line). On Windows the harness must be an `.exe`; a `.cmd` file needs a shell.
 
 The command line checks no trust: it runs the file you name. A host that starts the scripts of a repository passes `--expect-sha256`.
+
+### Events
+
+A run inside a git working tree writes one run in the [agent-events](https://github.com/GravionLabs/agent-events) format to `<git-common-dir>/.agents/events/<run>.jsonl`, which displays such as the Runs view of poimen read. It holds `run.started` (the script name as the title, the harness, the model, the process id), one task for the script, `task.finished` and `run.finished`; never the prompt or the answer. Outside a git working tree, or with `--no-events`, nothing is written.
+
+| Status      | `outcome`   | `reason`    |
+| ----------- | ----------- | ----------- |
+| `ok`        | `succeeded` | `done`      |
+| `error`     | `failed`    | `error`     |
+| `failed`    | `failed`    | `failed`    |
+| `timeout`   | `failed`    | `timeout`   |
+| `refused`   | `failed`    | `refused`   |
+| `cancelled` | `cancelled` | `cancelled` |
+
+A run that is refused before the script is read (an unknown or invalid script, another SHA-256) has no events.
+
+The environment variable `AGENT_EVENTS_RUN` sets the run id (`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`). A run file is only ever created anew: with an id that is not valid or has a file already, and after a failed write, the run goes on and a warning goes to stderr.
 
 ### Harnesses
 

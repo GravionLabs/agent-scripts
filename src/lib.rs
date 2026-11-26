@@ -14,6 +14,7 @@ pub mod harness;
 pub mod run;
 
 mod changes;
+mod events;
 mod output;
 mod process;
 
