@@ -1,0 +1,2 @@
+# the tests compare the text of the fixtures: the same line endings on every platform
+fixtures/** text eol=lf
