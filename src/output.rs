@@ -1,10 +1,11 @@
 //! The output targets that write (ADR 0019 "Output"): `file` and `append`. Their path is relative
-//! to the directory of the run and never leaves it, also not through a symlink.
+//! to the directory of the run and never leaves it, also not through a symlink or a hard link.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
+use crate::file_id;
 use crate::format::path_stays_inside;
 
 /// The file of the expanded output path `path` below `dir`, judged by its text. `path` may start
@@ -36,8 +37,9 @@ pub(crate) fn resolve(dir: &Path, path: &str) -> Result<PathBuf, String> {
     Ok(dir.join(below))
 }
 
-/// Checks that what exists of `file` lies inside `dir`.
-fn contained(dir: &Path, file: &Path) -> Result<(), String> {
+/// Checks that what exists of `file` lies inside `dir`. Returns the path to open: the resolved one
+/// when `file` exists, so what was checked is what is opened.
+fn contained(dir: &Path, file: &Path) -> Result<PathBuf, String> {
     let root = dir
         .canonicalize()
         .map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -54,7 +56,24 @@ fn contained(dir: &Path, file: &Path) -> Result<(), String> {
             existing.display()
         ));
     }
-    Ok(())
+    Ok(if existing == file {
+        real
+    } else {
+        file.to_owned()
+    })
+}
+
+/// Opens `file` to append to it, creating it when it is not there. On Unix a symlink at `file` is
+/// not followed.
+fn open_append(file: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.append(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(file)
 }
 
 /// Writes `text` to `file` below `dir`; with `append` after what is there, else only to a new file.
@@ -66,22 +85,32 @@ pub(crate) fn write(dir: &Path, file: &Path, text: &[u8], append: bool) -> Resul
         _ => format!("{}: {e}", file.display()),
     };
     // an existing target of `file` is refused by `create_new`, which follows no symlink
-    if append || file.symlink_metadata().is_err() {
-        contained(dir, file)?;
-    }
+    let target = if append || file.symlink_metadata().is_err() {
+        contained(dir, file)?
+    } else {
+        file.to_owned()
+    };
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    let mut options = OpenOptions::new();
-    if append {
-        options.append(true).create(true);
+    let mut opened = if append {
+        let opened = open_append(&target).map_err(fail)?;
+        // asked of the handle: no later change of the path changes the answer
+        if file_id::of(&opened).map_err(fail)?.links > 1 {
+            return Err(format!(
+                "{}: has more than one hard link, nothing is written",
+                file.display()
+            ));
+        }
+        opened
     } else {
-        options.write(true).create_new(true);
-    }
-    options
-        .open(file)
-        .and_then(|mut f| f.write_all(text))
-        .map_err(fail)
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(fail)?
+    };
+    opened.write_all(text).map_err(fail)
 }
 
 #[cfg(test)]
@@ -104,5 +133,16 @@ mod tests {
         ] {
             assert!(resolve(dir, &path).is_err(), "{path}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn append_does_not_open_through_a_symlink() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (kept, link) = (dir.path().join("kept"), dir.path().join("link"));
+        fs::write(&kept, "kept").unwrap();
+        std::os::unix::fs::symlink(&kept, &link).unwrap();
+        let error = open_append(&link).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ELOOP), "{error}");
     }
 }

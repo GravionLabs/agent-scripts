@@ -15,6 +15,7 @@ pub mod run;
 
 mod changes;
 mod events;
+mod file_id;
 mod output;
 mod process;
 

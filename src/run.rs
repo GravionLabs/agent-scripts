@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, TryLockError};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -12,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::events::Events;
 use crate::expand::{self, ExpandError, Values};
+use crate::file_id::{self, FileId};
 use crate::format::{Issue, Script, Target};
 use crate::harness::{self, Call, Harness};
 use crate::{changes, dir, output, process};
@@ -211,15 +213,18 @@ fn reasons(file: &Path, errors: &[Issue]) -> String {
 }
 
 /// Reads the script once and checks it: the content whose hash is compared is the content that runs.
-/// Returns the script and the canonical path of its file.
-fn load(request: &Request, host: &Host) -> Result<(Script, PathBuf), Box<Outcome>> {
+/// Returns the script and the identity of the file that was read.
+fn load(request: &Request, host: &Host) -> Result<(Script, FileId), Box<Outcome>> {
     let (file, name) = locate(request, host).map_err(|e| Box::new(refused(e)))?;
     let unreadable = |e: std::io::Error| Box::new(refused(format!("{}: {e}", file.display())));
     let canonical = file.canonicalize().map_err(unreadable)?;
     if !canonical.is_file() {
         return Err(Box::new(refused(format!("{}: not a file", file.display()))));
     }
-    let bytes = fs::read(&canonical).map_err(unreadable)?;
+    let mut handle = File::open(&canonical).map_err(unreadable)?;
+    let id = file_id::of(&handle).map_err(unreadable)?;
+    let mut bytes = Vec::new();
+    handle.read_to_end(&mut bytes).map_err(unreadable)?;
     if let Some(expected) = &request.expect_sha256 {
         let actual = hex(&Sha256::digest(&bytes));
         if !actual.eq_ignore_ascii_case(expected) {
@@ -243,18 +248,17 @@ fn load(request: &Request, host: &Host) -> Result<(Script, PathBuf), Box<Outcome
             file.display()
         ))));
     }
-    Ok((script, canonical))
+    Ok((script, id))
 }
 
-/// Takes the lock of the script at `canonical`. The operating system releases it with the file, so a
-/// run that crashed leaves none.
-fn lock(state_dir: Option<&Path>, canonical: &Path) -> Result<File, String> {
+/// Takes the lock of the script file `id`, one for all its hard links. The operating system releases
+/// it with the lock file, so a run that crashed leaves none.
+fn lock(state_dir: Option<&Path>, id: FileId) -> Result<File, String> {
     let locks = state_dir
         .ok_or("there is no state directory for the run lock")?
         .join("locks");
     fs::create_dir_all(&locks).map_err(|e| format!("{}: {e}", locks.display()))?;
-    let key = hex(&Sha256::digest(canonical.as_os_str().as_encoded_bytes()));
-    let path = locks.join(format!("{key}.lock"));
+    let path = locks.join(format!("{:x}-{:x}.lock", id.volume, id.index));
     let file = File::options()
         .create(true)
         .truncate(false)
@@ -271,7 +275,7 @@ fn lock(state_dir: Option<&Path>, canonical: &Path) -> Result<File, String> {
 /// Runs the script of `request` and returns when it ended. Setting `cancel` ends the run.
 pub fn run(request: &Request, host: &Host, cancel: &AtomicBool) -> Outcome {
     let started = Instant::now();
-    let (script, canonical) = match load(request, host) {
+    let (script, id) = match load(request, host) {
         Ok(loaded) => loaded,
         Err(outcome) => return *outcome,
     };
@@ -286,7 +290,7 @@ pub fn run(request: &Request, host: &Host, cancel: &AtomicBool) -> Outcome {
             )
         })
         .flatten();
-    let mut outcome = execute(&script, &canonical, request, host, cancel);
+    let mut outcome = execute(&script, id, request, host, cancel);
     outcome.events_warning = events.and_then(|events| events.finish(outcome.record.status));
     outcome.warnings = script.warnings;
     outcome.record.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -295,7 +299,7 @@ pub fn run(request: &Request, host: &Host, cancel: &AtomicBool) -> Outcome {
 
 fn execute(
     script: &Script,
-    canonical: &Path,
+    id: FileId,
     request: &Request,
     host: &Host,
     cancel: &AtomicBool,
@@ -358,7 +362,7 @@ fn execute(
         Err(e) => return refused(e),
     };
     // held until the end of the run
-    let _lock = match lock(host.state_dir.as_deref(), canonical) {
+    let _lock = match lock(host.state_dir.as_deref(), id) {
         Ok(lock) => lock,
         Err(e) => return refused(e),
     };

@@ -502,6 +502,39 @@ fn an_output_never_follows_a_symlink_out_of_the_directory() {
     assert_eq!(fs::read_dir(s.path("outside")).unwrap().count(), 1);
 }
 
+#[test]
+fn append_refuses_a_target_with_a_second_hard_link() {
+    let s = Setup::new();
+    let outside = s.write("outside/kept", "kept");
+    s.write("work/kept", "kept");
+    let script = s.script("output: { target: append, path: out/log }", "p");
+    for existing in [outside.to_str().unwrap(), "kept"] {
+        let link = format!("{existing}=out/log");
+        let env = [("FAKE_LINK", link.as_str()), ("FAKE_STDOUT", "more")];
+        let (code, record) = s.json(&script, &[], &env);
+        assert_eq!(code, 4, "{existing}: {record}");
+        assert_eq!(record["status"], "error");
+        let error = record["outputError"].as_str().unwrap();
+        assert!(error.contains("hard link"), "{error}");
+        assert_eq!(s.read("work/out/log"), "kept", "{existing}");
+        fs::remove_file(s.path("work/out/log")).unwrap();
+    }
+    assert_eq!(fs::read_to_string(outside).unwrap(), "kept");
+    assert_eq!(s.read("work/kept"), "kept");
+}
+
+#[cfg(unix)]
+#[test]
+fn append_follows_a_symlink_inside_the_directory() {
+    let s = Setup::new();
+    s.write("work/real", "one\n");
+    std::os::unix::fs::symlink("real", s.path("work/log")).unwrap();
+    let script = s.script("output: { target: append, path: log }", "p");
+    let (code, record) = s.json(&script, &[], &[("FAKE_STDOUT", "two\n")]);
+    assert_eq!(code, 0, "{record}");
+    assert_eq!(s.read("work/real"), "one\ntwo\n");
+}
+
 fn git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")
         .args([
@@ -753,6 +786,21 @@ fn one_run_per_script_and_a_crashed_run_leaves_no_lock() {
     }
     let (code, record) = s.json(&script, &[], &[]);
     assert_eq!(code, 0, "{record}");
+}
+
+#[test]
+fn hard_links_to_one_script_share_one_lock() {
+    let s = Setup::new();
+    let script = s.script("timeout: 30s", "p");
+    fs::create_dir(s.path("linked")).unwrap();
+    let link = s.path("linked/s.md");
+    fs::hard_link(&script, &link).unwrap();
+    let mut first = running(&s, &script, &[("FAKE_SLEEP_MS", "20000")]);
+    fs::remove_file(s.path("record")).unwrap();
+    let reason = s.refused(&link, &[]);
+    assert!(reason.contains("already running"), "{reason}");
+    first.kill().unwrap();
+    first.wait().unwrap();
 }
 
 #[cfg(unix)]
