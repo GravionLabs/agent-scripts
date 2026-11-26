@@ -8,6 +8,9 @@
 # The archives are built before the tag is written, so a failed build leaves no tag and no release behind.
 # Archives: agent-scripts-<version>-<target>.tar.gz (.zip on Windows), each with the binary, README.md and LICENSE.
 #
+# The release job refuses, before it writes anything, when main is no longer the dispatched commit: gh-release checks
+# out the tip of main, so the tag would describe other code than the archives. Dispatch the release again then.
+#
 # dry-run: true builds and smoke tests the archives and writes SHA256SUMS as a workflow artifact; it creates no commit,
 # tag or release.
 #
@@ -146,8 +149,22 @@ jobs:
           fetch-depth: 0 # git-cliff reads the whole history
           token: ${{ secrets.GH_PAT }} # pushes the version commit past the main ruleset
 
+      # gh-release has no input for the ref and checks out the tip of main, so this runs right before it. A re-run
+      # after the version commit was pushed is refused too: main has moved.
+      - name: Refuse when main moved since the dispatch
+        env:
+          DISPATCHED: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          tip=$(git rev-parse refs/remotes/origin/main)
+          if [ "$tip" != "$DISPATCHED" ]; then
+            echo "main moved since the dispatch: origin/main is $tip, the release built $DISPATCHED; nothing was written by this job, dispatch the release again" >&2
+            exit 1
+          fi
+
       # Commits Cargo.toml, Cargo.lock and CHANGELOG.md to main in one [skip ci] commit, tags that commit, creates the
-      # release (skipped when it exists, so a re-run is safe) and closes the issues and milestones it shipped.
+      # release (skipped when it exists) and closes the issues and milestones it shipped.
       - name: Create GitHub Release
         uses: GravionLabs/ci/versioning/gh-release@633aa5d6a75bb0160bdc44b7a4474473e3252fc5 # v1.19.0
         with:
