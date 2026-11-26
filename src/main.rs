@@ -58,7 +58,7 @@ struct RunArgs {
     /// Print the result record as JSON instead of the text.
     #[arg(long)]
     json: bool,
-    /// Write no agent-events run to `<git-common-dir>/.agents/events/`.
+    /// Write no agent-events run.
     #[arg(long)]
     no_events: bool,
     /// Refuse the script unless the SHA-256 of its content is this hex value.

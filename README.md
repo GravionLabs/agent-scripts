@@ -115,7 +115,9 @@ A run inside a git working tree writes one run in the [agent-events](https://git
 
 A run that is refused before the script is read (an unknown or invalid script, another SHA-256) has no events.
 
-The environment variable `AGENT_EVENTS_RUN` sets the run id (`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`). A run file is only ever created anew: with an id that is not valid or has a file already, and after a failed write, the run goes on and a warning goes to stderr.
+The environment variable `AGENT_EVENTS_DIR` (an absolute path) replaces the directory inside a git working tree; outside one nothing is written with it either. The runner deletes no old run files.
+
+The environment variable `AGENT_EVENTS_RUN` sets the run id (`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`). A run file is only ever created anew: with an id that is not valid or has a file already, a relative `AGENT_EVENTS_DIR`, and after a failed write, the run goes on and a warning goes to stderr.
 
 ### Harnesses
 

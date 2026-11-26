@@ -1,7 +1,7 @@
 //! The agent-events run of a script run (GravionLabs/agent-events: `SPEC.md` and the `jsonl-file`
 //! binding): `<git-common-dir>/.agents/events/<run>.jsonl` with the start of the run, one task for
-//! the script and the end of both. Outside a git working tree there is none. Nothing of the prompt
-//! or of the answer is written. A failure never reaches the run: it is kept as a warning.
+//! the script and the end of both; `AGENT_EVENTS_DIR` names another directory. Outside a git
+//! working tree there is none. Nothing of the prompt or of the answer is written. A failure never reaches the run: it is kept as a warning.
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -30,20 +30,27 @@ pub(crate) struct Events {
     warning: Option<String>,
 }
 
-/// `<git-common-dir>/.agents/events` of the working tree that holds `dir`.
-fn directory(dir: &Path) -> Option<PathBuf> {
+/// The directory of the run files of a run in `dir`; `None` outside a git working tree. It is
+/// `given` (it must be absolute), else `<git-common-dir>/.agents/events`.
+fn directory(dir: &Path, given: Option<&Path>) -> Option<Result<PathBuf, String>> {
     let out = changes::git(
         dir,
         &["rev-parse", "--is-inside-work-tree", "--git-common-dir"],
     )?;
     let common = out.strip_prefix(b"true\n")?;
     let common = common.strip_suffix(b"\n").unwrap_or(common);
-    // relative to `dir`, or absolute
-    Some(
-        dir.join(changes::path_of(common))
+    Some(match given {
+        Some(given) if given.is_absolute() => Ok(given.to_owned()),
+        Some(given) => Err(format!(
+            "AGENT_EVENTS_DIR: {} is not an absolute path",
+            given.display()
+        )),
+        // git gives it relative to `dir`, or absolute
+        None => Ok(dir
+            .join(changes::path_of(common))
             .join(".agents")
-            .join("events"),
-    )
+            .join("events")),
+    })
 }
 
 /// A run id of the spec: it is the name of the file, so it has no path separator.
@@ -97,22 +104,34 @@ fn new_run_id(name: &str) -> String {
 
 impl Events {
     /// Creates the file of a run of `script` in `dir` and writes the start of the run and of its
-    /// task. `id` is the run id the caller wants. `None` outside a git working tree.
-    pub(crate) fn start(dir: &Path, id: Option<&str>, script: &Script) -> Option<Events> {
-        let events = directory(dir)?;
+    /// task. `id` and `given` are the run id and the directory the caller wants. `None` outside a
+    /// git working tree.
+    pub(crate) fn start(
+        dir: &Path,
+        given: Option<&Path>,
+        id: Option<&str>,
+        script: &Script,
+    ) -> Option<Events> {
+        let events = directory(dir, given)?;
         let run = id.map_or_else(|| new_run_id(&script.name), str::to_owned);
-        let path = events.join(format!("{run}.jsonl"));
-        let opened = if is_run_id(&run) {
+        let opened = events.and_then(|events| {
+            if !is_run_id(&run) {
+                return Err(format!("{run:?} is not a run id"));
+            }
+            let path = events.join(format!("{run}.jsonl"));
             // a file that is there belongs to another writer, and a run starts only once
             fs::create_dir_all(&events)
                 .and_then(|()| File::options().append(true).create_new(true).open(&path))
                 .map_err(|e| format!("{}: {e}", path.display()))
-        } else {
-            Err(format!("{run:?} is not a run id"))
-        };
-        let (file, warning) = match opened {
-            Ok(file) => (Some(file), None),
-            Err(e) => (None, Some(format!("no events are written: {e}"))),
+                .map(|file| (file, path))
+        });
+        let (file, path, warning) = match opened {
+            Ok((file, path)) => (Some(file), path, None),
+            Err(e) => (
+                None,
+                PathBuf::new(),
+                Some(format!("no events are written: {e}")),
+            ),
         };
         let mut events = Events {
             file,

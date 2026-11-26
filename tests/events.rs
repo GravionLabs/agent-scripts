@@ -104,6 +104,7 @@ impl Setup {
             // the temporary directory is no repository, wherever it lies
             .env("GIT_CEILING_DIRECTORIES", self.root.path())
             .env_remove("AGENT_EVENTS_RUN")
+            .env_remove("AGENT_EVENTS_DIR")
             .envs(env.iter().copied())
             .output()
             .expect("the agent-scripts binary starts")
@@ -308,6 +309,47 @@ fn the_run_id_of_the_environment() {
         Some(0)
     );
     assert_eq!(s.files(EVENTS).len(), 2);
+}
+
+#[test]
+fn the_directory_of_the_environment() {
+    let s = Setup::repository();
+    let script = s.script("");
+    let dir = s.path("elsewhere");
+    let env = [("AGENT_EVENTS_DIR", dir.to_str().unwrap())];
+    let out = s.run(&script, &[], &env);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let files = s.files("elsewhere");
+    assert_eq!(files.len(), 1, "{files:?}");
+    ended(&checked(&files[0]), "succeeded", "done", "success");
+    assert!(!s.path("work/.git/.agents").exists());
+
+    // a relative one would lie in the repository
+    let out = s.run(&script, &[], &[("AGENT_EVENTS_DIR", "relative")]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        stderr(&out).contains("not an absolute path"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!s.path("work/relative").exists());
+    assert!(!s.path("work/.git/.agents").exists());
+
+    // an empty one is not set
+    assert_eq!(
+        s.run(&script, &[], &[("AGENT_EVENTS_DIR", "")])
+            .status
+            .code(),
+        Some(0)
+    );
+    ended(&s.events(), "succeeded", "done", "success");
+
+    // outside a working tree it changes nothing
+    let s = Setup::new();
+    let dir = s.path("elsewhere");
+    let env = [("AGENT_EVENTS_DIR", dir.to_str().unwrap())];
+    assert_eq!(s.run(&s.script(""), &[], &env).status.code(), Some(0));
+    assert!(!dir.exists());
 }
 
 #[test]

@@ -147,9 +147,11 @@ pub struct Host {
     /// The host applies the target `replace` itself, with the text of the record. Without it such a
     /// script is refused.
     pub replace: bool,
-    /// Write an agent-events run for a run inside a git working tree, to
-    /// `<git-common-dir>/.agents/events/<run>.jsonl`.
+    /// Write an agent-events run for a run inside a git working tree.
     pub events: bool,
+    /// The directory of the run files, an absolute path; without one
+    /// `<git-common-dir>/.agents/events`.
+    pub events_dir: Option<PathBuf>,
     /// The id of that run; without one the runner makes one.
     pub events_run: Option<String>,
 }
@@ -164,6 +166,9 @@ impl Host {
             state_dir: dir::state_dir(),
             replace: false,
             events: true,
+            events_dir: std::env::var_os("AGENT_EVENTS_DIR")
+                .filter(|dir| !dir.is_empty())
+                .map(PathBuf::from),
             events_run: std::env::var_os("AGENT_EVENTS_RUN")
                 .filter(|id| !id.is_empty())
                 .map(|id| id.to_string_lossy().into_owned()),
@@ -272,7 +277,14 @@ pub fn run(request: &Request, host: &Host, cancel: &AtomicBool) -> Outcome {
     };
     let events = host
         .events
-        .then(|| Events::start(&request.dir, host.events_run.as_deref(), &script))
+        .then(|| {
+            Events::start(
+                &request.dir,
+                host.events_dir.as_deref(),
+                host.events_run.as_deref(),
+                &script,
+            )
+        })
         .flatten();
     let mut outcome = execute(&script, &canonical, request, host, cancel);
     outcome.events_warning = events.and_then(|events| events.finish(outcome.record.status));
