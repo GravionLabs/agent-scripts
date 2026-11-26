@@ -1,0 +1,3 @@
+---
+model: sonnet
+A prompt.

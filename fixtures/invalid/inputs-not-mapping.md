@@ -1,0 +1,4 @@
+---
+inputs: [who]
+---
+Prompt.

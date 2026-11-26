@@ -1,0 +1,4 @@
+---
+output: { target: print }
+---
+Prompt.
