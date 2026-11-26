@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 
@@ -14,8 +14,8 @@ use crate::process;
 #[derive(Debug)]
 pub(crate) struct Snapshot {
     root: PathBuf,
-    /// The content filters git is configured with: programs that `git status` starts.
-    filters: Vec<u8>,
+    /// The whole configuration of git: it names programs that `git status` starts.
+    config: Vec<u8>,
     /// By the path relative to the root, as the bytes git gives.
     paths: BTreeMap<Vec<u8>, State>,
 }
@@ -30,11 +30,6 @@ enum State {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = git_output(dir, args)?;
-    out.status.success().then_some(out.stdout)
-}
-
-fn git_output(dir: &Path, args: &[&str]) -> Option<Output> {
     let mut command = Command::new(process::resolve("git").ok()?);
     // a file system monitor of the repository config would be a program git starts
     command
@@ -42,7 +37,10 @@ fn git_output(dir: &Path, args: &[&str]) -> Option<Output> {
         .args(args)
         .current_dir(dir)
         .stdin(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        // a missing object of a partial clone is not fetched: a remote can name a program
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_ALLOW_PROTOCOL", "");
     // `dir` names the repository, not the environment of a git hook
     for name in [
         "GIT_DIR",
@@ -52,14 +50,8 @@ fn git_output(dir: &Path, args: &[&str]) -> Option<Output> {
     ] {
         command.env_remove(name);
     }
-    command.output().ok()
-}
-
-/// The `filter.*` entries of the configuration of `dir`; reading them starts nothing.
-fn filters(dir: &Path) -> Option<Vec<u8>> {
-    let out = git_output(dir, &["config", "-z", "--get-regexp", "^filter\\."])?;
-    // 1: there is none
-    matches!(out.status.code(), Some(0 | 1)).then_some(out.stdout)
+    let out = command.output().ok()?;
+    out.status.success().then_some(out.stdout)
 }
 
 #[cfg(unix)]
@@ -99,14 +91,16 @@ fn hash(path: &Path) -> std::io::Result<[u8; 32]> {
 }
 
 /// The state of the working tree that holds `dir`; `None` outside one. With the snapshot of the
-/// start as `before`, also `None` when the filters changed since: the agent may have written the
-/// configuration, and its programs would run without the limits of the script.
+/// start as `before`, also `None` when the git configuration changed since: the agent may have
+/// written it, and the programs it names (filters, remotes) would run without the limits of the
+/// script.
 pub(crate) fn snapshot(dir: &Path, before: Option<&Snapshot>) -> Option<Snapshot> {
     let top = git(dir, &["rev-parse", "--show-toplevel"])?;
     let top = top.strip_suffix(b"\n").unwrap_or(&top);
     let root = path_of(top);
-    let filters = filters(dir)?;
-    if before.is_some_and(|b| b.filters != filters) {
+    // listing the configuration starts nothing
+    let config = git(dir, &["config", "--list", "-z"])?;
+    if before.is_some_and(|b| b.config != config) {
         return None;
     }
     let status = git(
@@ -129,7 +123,7 @@ pub(crate) fn snapshot(dir: &Path, before: Option<&Snapshot>) -> Option<Snapshot
         .collect();
     Some(Snapshot {
         root,
-        filters,
+        config,
         paths,
     })
 }

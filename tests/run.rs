@@ -582,6 +582,35 @@ fn a_filter_planted_during_the_run_is_never_started() {
     assert!(record.get("changedFiles").is_none(), "{record}");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_remote_planted_during_the_run_is_never_asked() {
+    let s = Setup::new();
+    let work = s.path("work");
+    s.write("work/a", "committed");
+    git(&work, &["init", "--quiet"]);
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "--quiet", "-m", "start"]);
+    let marker = s.path("fetched");
+    let config = format!(
+        "[core]\n\trepositoryformatversion = 1\n[extensions]\n\tpartialClone = origin\n\
+         [remote \"origin\"]\n\tpromisor = true\n\turl = \"ext::sh -c touch% {}\"\n\
+         [protocol \"ext\"]\n\tallow = always\n",
+        marker.display()
+    );
+    // a HEAD that names a missing object makes git fetch it
+    let writes = format!(
+        ".git/config={}\n.git/HEAD={}",
+        config.replace('\n', "\r"),
+        "1".repeat(40)
+    );
+    let script = s.script("", "p");
+    let (code, record) = s.json(&script, &[], &[("FAKE_WRITE", &writes)]);
+    assert_eq!(code, 0, "{record}");
+    assert!(!marker.exists(), "the remote was asked");
+    assert!(record.get("changedFiles").is_none(), "{record}");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn an_orphan_in_a_session_of_its_own_ends_too() {
