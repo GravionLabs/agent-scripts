@@ -4,7 +4,7 @@ Agent scripts: saved agent calls as Markdown with frontmatter, and the runner (R
 
 An agent script is a prompt with a harness, a model, the tools the agent may use, inputs and an output target, kept as one Markdown file. The runner validates it and runs it headless through the harness CLI (`claude`, `copilot`). The format and the runner are decided in GravionLabs/poimen [ADR 0019: Agent scripts: format and runner](https://github.com/GravionLabs/poimen/blob/release/next/docs/adr/0019-agent-scripts-format-and-runner.md).
 
-This repository holds the library crate `agent-scripts` and the binary `agent-scripts`. It parses, validates and lists scripts (`validate`, `list`); running them (`run`) is not built yet.
+This repository holds the library crate `agent-scripts` and the binary `agent-scripts`. It parses, validates, lists and runs scripts (`validate`, `list`, `run`).
 
 ## Format
 
@@ -56,6 +56,69 @@ agent-scripts list [<dir>]                                 # name, source, harne
 ```
 
 `list` shows the project scripts (`.agents/scripts/*.md` in the root of the repository that holds `<dir>`, default the current directory) and the user scripts (`agent-scripts/scripts/*.md` in the user config directory: `~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows). A project script replaces the user script of the same name.
+
+## Run
+
+```sh
+agent-scripts run summarize-file --file notes/a.md
+agent-scripts run .agents/scripts/summarize-file.md --file notes/a.md --input audience=ops --json
+```
+
+`run <path|name>` takes a script file, or the name of a project or user script. An argument of lowercase letters, digits and `-` only is a name; write `./name` for such a file. The runner expands the prompt, starts the harness headless (print mode, no shell, no input) in the directory of the run and prints the answer.
+
+| Flag                     | Value                                                                  |
+| ------------------------ | ---------------------------------------------------------------------- |
+| `--dir <d>`              | the working directory, `{dir}` (default: the current directory)       |
+| `--input <k>=<v>`        | a declared input; may be repeated                                      |
+| `--file <f>`             | `{file}`, passed as written                                            |
+| `--selection <text>`     | `{selection}`                                                          |
+| `--selection-file <f>`   | `{selection}`, read from a file                                        |
+| `--json`                 | print the result record instead of the text                            |
+| `--expect-sha256 <hash>` | refuse the script unless the SHA-256 of its content is this hex value |
+
+The record is `{ status, exitCode?, durationMs, text, changedFiles?, outputError? }`. `changedFiles` (in a git working tree) are the paths, relative to the repository root, that are modified or untracked at the end and whose content differs from the start; another process in the same tree shows there too. Changes inside submodules are not listed, and the key is absent when the run changed the git configuration (`git status` could start a program it names); the runner's own git calls fetch nothing.
+
+| Exit code | Status      | Meaning                                                                         |
+| --------- | ----------- | ------------------------------------------------------------------------------- |
+| 0         | `ok`        | the harness succeeded and the output target was applied                         |
+| 2         | `refused`   | usage error: unknown flag, missing required input (a bad flag prints no record) |
+| 3         | `failed`    | the harness could not be started                                                |
+| 4         | `error`     | the harness exited non-zero, or the output target failed (`outputError`)        |
+| 5         | `timeout`   | the `timeout` of the script passed                                              |
+| 6         | `refused`   | every other refusal: the harness was not started                                |
+| 130, 143  | `cancelled` | SIGINT, SIGTERM (Windows: 130 for Ctrl-C and Ctrl-Break)                       |
+
+SIGHUP and SIGQUIT cancel a run too (exit codes 129 and 131), unless they are ignored.
+
+- **Tools:** the `tools` of the script are the only ones the agent has. The harness gets their names (the part before `(`) as the tools that exist and each entry as written as a tool that runs without a prompt. A model or tool entry that starts with `-` or names `bypassPermissions` is refused; a prompt that starts with `-` gets a line break before it.
+- **Isolation:** the harness settings of the repository stay out (`claude`: `--setting-sources user --strict-mcp-config`); your own user settings apply. `copilot` reads `.github/copilot/settings.json` of the repository and has no flag to skip it, so its scripts are refused.
+- **Timeout and cancel:** the process tree of the harness ends: SIGTERM, then SIGKILL after 5 s; on Windows a job object. What a harness leaves running after it ended is ended the same way. On Linux a process that cleared its environment, left the session of the harness and lost its parent within half a second is not found. On macOS a process that left the session of the harness and lost its parent within half a second is not found. A runner that is killed (`kill -9`) ends nothing on macOS; on Linux only the harness itself ends, not what it started (Windows ends everything). Such leftovers do not hold the lock of the script.
+- **One run per script:** a second run of the same file is refused while one runs.
+- **Output:** `file` writes a new file and never overwrites; `append` appends. Both stay inside the directory of the run, also through symlinks, and write only after an `ok` run. `replace` is left to a host application; the command line refuses it.
+- **Limits of the system:** the prompt is one argument of the harness, so the system may refuse a long one (Linux: 128 KiB; Windows: 32 767 characters for the whole command line). On Windows the harness must be an `.exe`; a `.cmd` file needs a shell.
+
+The command line checks no trust: it runs the file you name. A host that starts the scripts of a repository passes `--expect-sha256`.
+
+### Harnesses
+
+`claude` and `copilot` are built in. `config.json` in the user config directory (`~/.config/agent-scripts/` on Linux) replaces a definition by its id, as a whole:
+
+```json
+{
+  "harnesses": {
+    "claude": {
+      "command": ["/opt/claude/claude"],
+      "modelArgs": ["--model", "{model}"],
+      "toolsArgs": ["--tools", "{tools}"],
+      "allowToolArgs": ["--allowedTools", "{tool}"],
+      "isolateArgs": ["--setting-sources", "user", "--strict-mcp-config"],
+      "printArgs": ["-p", "{prompt}"]
+    }
+  }
+}
+```
+
+A definition without `toolsArgs` or `isolateArgs` runs no script. `command` starts with a program name of the `PATH` or an absolute path. The environment variables `AGENT_SCRIPTS_CONFIG_DIR` and `AGENT_SCRIPTS_STATE_DIR` (absolute paths) replace the config directory and the directory of the run locks.
 
 ## Install
 

@@ -16,12 +16,39 @@ path = "src/lib.rs"
 name = "agent-scripts"
 path = "src/main.rs"
 
+# A fake harness the integration tests start in place of a real agent CLI. The feature is on for tests
+# only (the dev-dependency on this crate below), so a build or an install never has the binary.
+[[bin]]
+name = "fake-harness"
+path = "tests/helpers/fake_harness.rs"
+required-features = ["fake-harness"]
+test = false
+doc = false
+
+[features]
+fake-harness = []
+
 [dependencies]
 clap = { version = "4.6.10", features = ["derive"] }
 dirs = "7.0.0"
+serde_json = "1.0.154"
 serde_yaml_ng = "0.10.0"
+sha2 = "0.11.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.178"
+signal-hook = "0.4.1"
+
+[target.'cfg(windows)'.dependencies]
+ctrlc = "3.5.1"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
+agent-scripts = { path = ".", features = ["fake-harness"] }
 jsonschema = { version = "0.63.1", default-features = false }
-serde_json = "1.0.154"
 tempfile = "3.27.0"
