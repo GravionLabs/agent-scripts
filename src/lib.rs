@@ -1,6 +1,15 @@
 //! Agent scripts: saved agent calls as Markdown files with YAML frontmatter, and the runner that
-//! executes them (ADR 0019 of GravionLabs/poimen). Parsing, running and the subcommands follow in
-//! later issues; for now the crate only exposes its version.
+//! executes them (ADR 0019 of GravionLabs/poimen).
+//!
+//! - [`format`](mod@format): parses and validates the text of one script file.
+//! - [`expand`](mod@expand): fills the variables of a prompt.
+//! - [`dir`]: loads script files and lists the project and user scripts.
+//!
+//! Running a script follows in later issues.
+
+pub mod dir;
+pub mod expand;
+pub mod format;
 
 /// The version of the crate, as written in `Cargo.toml` (the release pipeline sets it).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

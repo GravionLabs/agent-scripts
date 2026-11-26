@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent script frontmatter (format 1)",
+  "type": "object",
+  "properties": {
+    "format": { "const": 1, "default": 1 },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "maxLength": 64
+    },
+    "description": { "type": "string" },
+    "harness": { "type": "string", "minLength": 1, "default": "claude" },
+    "model": { "type": "string", "minLength": 1 },
+    "tools": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": []
+    },
+    "inputs": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "not": { "enum": ["file", "selection", "dir"] }
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "default": { "type": "string" },
+          "required": { "type": "boolean" }
+        }
+      },
+      "default": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "enum": ["show", "file", "append", "replace"],
+          "default": "show"
+        },
+        "path": { "type": "string", "minLength": 1 }
+      },
+      "if": {
+        "required": ["target"],
+        "properties": { "target": { "enum": ["file", "append"] } }
+      },
+      "then": { "required": ["path"] },
+      "default": { "target": "show" }
+    },
+    "timeout": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*[smh]$",
+      "default": "10m"
+    },
+    "triggers": { "type": "array", "default": [] }
+  }
+}
