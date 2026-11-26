@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::format::{self, Invalid, Issue, Script};
 
@@ -42,6 +42,14 @@ impl Entry {
     }
 }
 
+/// The name that counts for duplicates: not the stand-in of a file whose name is unknown.
+fn own_name(loaded: &Loaded) -> Option<&str> {
+    match loaded {
+        Ok(s) => Some(&s.name),
+        Err(i) => i.named.then_some(i.name.as_str()),
+    }
+}
+
 fn name_of(loaded: &Loaded) -> &str {
     match loaded {
         Ok(s) => &s.name,
@@ -57,7 +65,13 @@ pub fn user_scripts_dir() -> Option<PathBuf> {
 
 /// The root of the repository that holds `dir` (the nearest directory with `.git`), else `dir`.
 pub fn project_root(dir: &Path) -> PathBuf {
-    let absolute = std::path::absolute(dir).unwrap_or_else(|_| dir.to_owned());
+    let mut absolute = std::path::absolute(dir).unwrap_or_else(|_| dir.to_owned());
+    // `ancestors` cuts components off the text, so a `..` left in it must be resolved first
+    if absolute.components().any(|c| c == Component::ParentDir)
+        && let Ok(resolved) = absolute.canonicalize()
+    {
+        absolute = resolved;
+    }
     absolute
         .ancestors()
         .find(|a| a.join(".git").exists())
@@ -72,6 +86,7 @@ fn read(file: &Path) -> Loaded {
         Err(e) => Err(Box::new(Invalid {
             file: file.to_owned(),
             name: format::file_stem(file),
+            named: false,
             harness: None,
             errors: vec![Issue::new("file", format!("cannot be read: {e}"))],
             warnings: Vec::new(),
@@ -106,16 +121,20 @@ fn reject_duplicates(scripts: Vec<Loaded>) -> Vec<Loaded> {
             Err(i) => &i.file,
         };
         let file = file.file_name().unwrap_or_default().to_string_lossy();
-        files
-            .entry(name_of(s).to_owned())
-            .or_default()
-            .push(file.into_owned());
+        if let Some(name) = own_name(s) {
+            files
+                .entry(name.to_owned())
+                .or_default()
+                .push(file.into_owned());
+        }
     }
     files.values_mut().for_each(|f| f.sort());
     scripts
         .into_iter()
         .map(|s| {
-            let all = &files[name_of(&s)];
+            let Some(all) = own_name(&s).and_then(|n| files.get(n)) else {
+                return s;
+            };
             if all.len() < 2 {
                 return s;
             }

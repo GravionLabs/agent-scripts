@@ -108,6 +108,10 @@ pub struct Invalid {
     pub file: PathBuf,
     /// The `name` of the frontmatter when it is valid, else the file name without `.md`.
     pub name: String,
+    /// Whether the file is known to carry `name`: it sets it, or its frontmatter was read and sets
+    /// none. `false` when `name` is only a stand-in (broken frontmatter, an invalid `name`); such a
+    /// name makes no other script a duplicate.
+    pub named: bool,
     /// The harness, when it could be read.
     pub harness: Option<String>,
     /// Never empty.
@@ -121,6 +125,7 @@ impl Script {
         Invalid {
             file: self.file,
             name: self.name,
+            named: true,
             harness: Some(self.harness),
             errors: vec![error],
             warnings: self.warnings,
@@ -168,6 +173,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Script, Box<Invalid>> {
         Box::new(Invalid {
             file: file.to_owned(),
             name: stem.clone(),
+            named: false,
             harness: None,
             errors: vec![Issue::new(key, reason)],
             warnings: Vec::new(),
@@ -190,10 +196,20 @@ pub fn parse(file: &Path, text: &str) -> Result<Script, Box<Invalid>> {
     if let Some(v) = map.get("format")
         && !matches!(v, Value::Number(n) if n.as_f64() == Some(f64::from(FORMAT)))
     {
-        return Err(invalid(
+        let mut unknown = invalid(
             "format",
             format!("unknown format {}; this version reads {FORMAT}", show(v)),
-        ));
+        );
+        // The name still counts: the script keeps its place before the user script of that name.
+        match map.get("name") {
+            None => unknown.named = true,
+            Some(Value::String(n)) if is_name(n) => {
+                unknown.name = n.clone();
+                unknown.named = true;
+            }
+            Some(_) => {}
+        }
+        return Err(unknown);
     }
 
     let mut p = Parser::default();
@@ -283,6 +299,7 @@ pub fn parse(file: &Path, text: &str) -> Result<Script, Box<Invalid>> {
         }),
         (name, harness) => Err(Box::new(Invalid {
             file: file.to_owned(),
+            named: name.is_some() || !map.contains_key("name"),
             name: name.unwrap_or(stem),
             harness,
             errors: p.errors,

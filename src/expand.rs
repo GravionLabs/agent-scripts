@@ -70,7 +70,8 @@ fn parts(template: &str) -> Vec<Part<'_>> {
             out.push(Part::Text(brace));
             rest = tail;
         } else if brace == "{"
-            && let Some(end) = after.find('}')
+            && let Some(end) = after.find(['{', '}'])
+            && after[end..].starts_with('}')
         {
             out.push(Part::Placeholder(&after[..end]));
             rest = &after[end + 1..];
@@ -207,6 +208,11 @@ mod tests {
         );
         assert_eq!(placeholders("a } b { c"), Vec::<&str>::new());
         assert_eq!(placeholders("{a} {{b}} {c d}"), ["a", "c d"]);
+        // a lone brace does not swallow the escapes after it
+        assert_eq!(
+            expand("A { brace, then {{x}}", &none, &Values::default()),
+            Ok("A { brace, then {x}".into())
+        );
     }
 
     #[test]

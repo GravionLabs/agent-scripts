@@ -117,6 +117,47 @@ fn both_scripts_of_a_duplicate_name_are_invalid() {
 }
 
 #[test]
+fn a_stand_in_name_makes_no_script_a_duplicate() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(
+        tmp.path(),
+        "deploy.md",
+        &script("name: My Deploy", "bad name"),
+    );
+    write(tmp.path(), "ship.md", "no frontmatter");
+    write(tmp.path(), "b.md", &script("name: deploy", "b"));
+    write(tmp.path(), "c.md", &script("name: ship", "c"));
+
+    for file in ["b.md", "c.md"] {
+        assert!(dir::load(&tmp.path().join(file)).unwrap().is_ok(), "{file}");
+    }
+}
+
+#[test]
+fn a_script_of_an_unknown_format_keeps_its_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (project, user) = (tmp.path().join("project"), tmp.path().join("user"));
+    write(
+        &project,
+        "foo.md",
+        &script("format: 2\nname: deploy", "new"),
+    );
+    write(&user, "deploy.md", &script("{}", "user"));
+
+    let list = dir::list(Some(&project), Some(&user)).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(
+        (list[0].name(), list[0].source),
+        ("deploy", Source::Project)
+    );
+    assert!(list[0].script.is_err());
+
+    // and it is a duplicate of a script with that name in its own directory
+    write(&project, "a.md", &script("name: deploy", "a"));
+    assert!(dir::load(&project.join("a.md")).unwrap().is_err());
+}
+
+#[test]
 fn a_file_that_is_not_utf8_is_invalid() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("a.md");
@@ -142,6 +183,20 @@ fn the_project_root_is_the_directory_with_git() {
     fs::write(root.join(".git"), "gitdir: elsewhere").unwrap();
     assert_eq!(dir::project_root(&deep), root);
     assert_eq!(dir::project_root(&root), root);
+}
+
+#[test]
+fn dot_dot_is_resolved_before_the_root_is_searched() {
+    let tmp = tempfile::tempdir().unwrap();
+    // the real path: macOS and Windows reach their temporary directory through links or short names
+    let base = tmp.path().canonicalize().unwrap();
+    let (repo, plain) = (base.join("repo"), base.join("plain"));
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    fs::create_dir_all(&plain).unwrap();
+    // pushed one by one: `join("../plain")` would keep the `/` on Windows
+    let sideways = repo.join("..").join("plain");
+    assert_eq!(dir::project_root(&sideways), plain);
+    assert_ne!(dir::project_root(&repo.join("..")), repo);
 }
 
 #[test]
