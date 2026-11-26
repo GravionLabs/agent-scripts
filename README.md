@@ -1,8 +1,8 @@
 # agent-scripts
 
-Agent scripts: saved agent calls as Markdown with frontmatter, and the runner (Rust crate and CLI) shared by poimen and Nixe.
+Agent scripts: saved agent calls as Markdown with frontmatter, and the runner that executes them, as a command line tool and a Rust library.
 
-An agent script is a prompt with a harness, a model, the tools the agent may use, inputs and an output target, kept as one Markdown file. The runner validates it and runs it headless through the harness CLI (`claude`, `copilot`). The format and the runner are decided in GravionLabs/poimen [ADR 0019: Agent scripts: format and runner](https://github.com/GravionLabs/poimen/blob/release/next/docs/adr/0019-agent-scripts-format-and-runner.md).
+An agent script is a prompt with a harness, a model, the tools the agent may use, inputs and an output target, kept as one Markdown file. The runner validates it and runs it headless through the harness CLI (`claude`, `copilot`), from a terminal, a script, cron or CI, or embedded in an application through the library.
 
 This repository holds the library crate `agent-scripts` and the binary `agent-scripts`. It parses, validates, lists and runs scripts (`validate`, `list`, `run`).
 
