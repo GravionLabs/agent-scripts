@@ -1,0 +1,55 @@
+name: CI
+
+# fmt, clippy (-D warnings) and tests of the crate on Linux, macOS and Windows, with the toolchain of
+# rust-toolchain.toml. The `ci` job runs last and is the single check to require on `main` (ruleset in
+# .github/rulesets/main.json). release.yml calls this workflow before it builds a release.
+on:
+  pull_request:
+    branches: [main, "release/**"]
+  push:
+    branches: [main, "release/**"]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # a workflow_call from release.yml shares the ref of the release: never cancel it
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # cargo fmt --all --check, cargo clippy --all-targets --locked -- -D warnings, cargo test --locked
+      - uses: GravionLabs/ci/rust/ci@633aa5d6a75bb0160bdc44b7a4474473e3252fc5 # v1.19.0
+
+  # The one check to require: red when any needed job failed or was cancelled.
+  ci:
+    name: ci
+    if: always()
+    needs: [rust]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needed job results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success) ;;
+              *) echo "a needed job ended as $r"; exit 1 ;;
+            esac
+          done
