@@ -86,6 +86,8 @@ impl Setup {
             .env("AGENT_SCRIPTS_CONFIG_DIR", self.path("config"))
             .env("AGENT_SCRIPTS_STATE_DIR", self.path("state"))
             .env("FAKE_RECORD", self.path("record"))
+            .env_remove("AGENT_EVENTS_RUN")
+            .env_remove("AGENT_EVENTS_DIR")
             // the temporary directory is no repository, wherever it lies
             .env("GIT_CEILING_DIRECTORIES", self.root.path());
         command

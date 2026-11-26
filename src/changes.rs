@@ -29,7 +29,7 @@ enum State {
     Other,
 }
 
-fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let mut command = Command::new(process::resolve("git").ok()?);
     // a file system monitor of the repository config would be a program git starts
     command
@@ -55,13 +55,13 @@ fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
 }
 
 #[cfg(unix)]
-fn path_of(bytes: &[u8]) -> PathBuf {
+pub(crate) fn path_of(bytes: &[u8]) -> PathBuf {
     use std::os::unix::ffi::OsStrExt;
     std::ffi::OsStr::from_bytes(bytes).into()
 }
 
 #[cfg(not(unix))]
-fn path_of(bytes: &[u8]) -> PathBuf {
+pub(crate) fn path_of(bytes: &[u8]) -> PathBuf {
     String::from_utf8_lossy(bytes).into_owned().into()
 }
 

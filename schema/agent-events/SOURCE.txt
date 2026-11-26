@@ -1,0 +1,5 @@
+core.schema.json is a copy of schema/v0/core.schema.json of GravionLabs/agent-events (MIT),
+release v0.2.3 (commit 6812e19c2ae136efaf21478d5b31c85cf1af789e).
+https://github.com/GravionLabs/agent-events/blob/v0.2.3/schema/v0/core.schema.json
+
+Do not edit it here. To update, copy the file of a newer release and change this note.
