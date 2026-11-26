@@ -4,12 +4,18 @@
 //! - [`format`](mod@format): parses and validates the text of one script file.
 //! - [`expand`](mod@expand): fills the variables of a prompt.
 //! - [`dir`]: loads script files and lists the project and user scripts.
-//!
-//! Running a script follows in later issues.
+//! - [`harness`]: the harness definitions and the argv of a call.
+//! - [`run`](mod@run): runs a script with its harness in print mode.
 
 pub mod dir;
 pub mod expand;
 pub mod format;
+pub mod harness;
+pub mod run;
+
+mod changes;
+mod output;
+mod process;
 
 /// The version of the crate, as written in `Cargo.toml` (the release pipeline sets it).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

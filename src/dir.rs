@@ -8,6 +8,10 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::format::{self, Invalid, Issue, Script};
 
+/// Replaces the user config directory of the runner (an absolute path).
+pub const CONFIG_DIR_VAR: &str = "AGENT_SCRIPTS_CONFIG_DIR";
+/// Replaces the state directory of the runner (an absolute path).
+pub const STATE_DIR_VAR: &str = "AGENT_SCRIPTS_STATE_DIR";
 /// The project scripts, relative to the repository root.
 pub const PROJECT_SCRIPTS: &str = ".agents/scripts";
 
@@ -60,7 +64,32 @@ fn name_of(loaded: &Loaded) -> &str {
 /// `scripts` in the user config directory (`dirs::config_dir()/agent-scripts`); `None` when the
 /// platform gives no config directory.
 pub fn user_scripts_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|c| c.join("agent-scripts").join("scripts"))
+    user_config_dir().map(|c| c.join("scripts"))
+}
+
+/// The user config directory of the runner: the environment variable [`CONFIG_DIR_VAR`] when set,
+/// else `dirs::config_dir()/agent-scripts`.
+pub fn user_config_dir() -> Option<PathBuf> {
+    from_env(CONFIG_DIR_VAR).or_else(|| dirs::config_dir().map(|c| c.join("agent-scripts")))
+}
+
+/// The state directory of the runner (the run locks): the environment variable [`STATE_DIR_VAR`]
+/// when set, else `agent-scripts` in `dirs::state_dir()`, or in `dirs::data_local_dir()` on a
+/// platform without a state directory.
+pub fn state_dir() -> Option<PathBuf> {
+    from_env(STATE_DIR_VAR).or_else(|| {
+        dirs::state_dir()
+            .or_else(dirs::data_local_dir)
+            .map(|d| d.join("agent-scripts"))
+    })
+}
+
+/// A directory from the environment; a relative path is ignored, it would depend on where the
+/// runner starts.
+fn from_env(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
 }
 
 /// The root of the repository that holds `dir` (the nearest directory with `.git`), else `dir`.
@@ -81,7 +110,15 @@ pub fn project_root(dir: &Path) -> PathBuf {
 
 /// Reads one file and checks it by itself. A file that cannot be read is invalid.
 fn read(file: &Path) -> Loaded {
-    match std::fs::read_to_string(file) {
+    check_one(file, std::fs::read(file))
+}
+
+/// Checks what was read from `file` by itself.
+fn check_one(file: &Path, bytes: io::Result<Vec<u8>>) -> Loaded {
+    let text = bytes.and_then(|b| {
+        String::from_utf8(b).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.utf8_error()))
+    });
+    match text {
         Ok(text) => format::parse(file, &text),
         Err(e) => Err(Box::new(Invalid {
             file: file.to_owned(),
@@ -167,11 +204,21 @@ pub fn scan(dir: &Path) -> io::Result<Vec<Loaded>> {
 /// An error means that the file or its directory cannot be read.
 pub fn load(file: &Path) -> io::Result<Loaded> {
     std::fs::metadata(file)?;
+    in_directory(file, read(file))
+}
+
+/// As [`load`], for the content `bytes` the caller already read from `file`: the file itself is not
+/// read again.
+pub fn load_bytes(file: &Path, bytes: Vec<u8>) -> io::Result<Loaded> {
+    in_directory(file, check_one(file, Ok(bytes)))
+}
+
+/// Checks `loaded` against the other scripts of the directory of `file`.
+fn in_directory(file: &Path, loaded: Loaded) -> io::Result<Loaded> {
     let parent = match file.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
     };
-    let loaded = read(file);
     // only a `*.md` file is a script of its directory
     if file.extension().is_none_or(|x| x != "md") {
         return Ok(loaded);
